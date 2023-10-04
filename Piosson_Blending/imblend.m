@@ -1,0 +1,115 @@
+function  out = imblend( source, mask, target, transparent )
+%Source, mask, and target are the same size (as long as you do not remove
+%the call to fiximages.m). You may want to use a flag for whether or not to
+%treat the source object as 'transparent' (e.g. taking the max gradient
+%rather than the source gradient).
+%MGhane
+
+%borders include in mask/source
+if((sum(mask(1,:,1))+sum(mask(:,1,1))+sum(mask(size(mask,1),:,1))+sum(mask(:,size(mask,2),1)))>0)
+    out=imblend_for_border_mask(source, mask, target, transparent );
+else
+
+% finding pixels under the mask
+Size = size(target);
+[jmaskind,imaskind] = find(mask(:,:,1) == 1);
+
+%Indexing
+all_row = ones((Size(1)*Size(2)),1);
+all_row(:,1) = 1:(Size(1)*Size(2));
+indexeup = sub2ind(Size,jmaskind-1,imaskind);
+indexed = sub2ind(Size,jmaskind+1,imaskind);
+indexer = sub2ind(Size,jmaskind,imaskind+1);
+indexel = sub2ind(Size,jmaskind,imaskind-1);
+indexe = sub2ind(Size(1:2),jmaskind,imaskind);
+tindrow = cat(1,all_row,indexe,indexe,indexe,indexe,indexe);
+tindcol = cat(1,all_row,indexeup,indexed,indexer,indexel,indexe);
+
+%Poisson equation for each channel
+v = ones(length(indexe)*5 , 1)*-1;
+v((length(indexe)*4+1):length(indexe)*5 , 1) = v((length(indexe)*4+1):length(indexe)*5 , 1)*-3;
+all_row = ones((Size(1)*Size(2)),1);
+v = cat(1,all_row,v);
+A= sparse(tindrow,tindcol,v,Size(1)*Size(2),Size(1)*Size(2));
+sourcer = source(:,:,1);
+sourcer = sourcer(:);
+sourceg = source(:,:,2);
+sourceg = sourceg(:);
+sourceb = source(:,:,3);
+sourceb = sourceb(:);
+bred = target(:,:,1);
+bred = resize(bred,[size(bred,1)*size(bred,2),1]);
+bred(indexe) = 4*sourcer(indexe)-sourcer(indexeup)-sourcer(indexed)-sourcer(indexel)-sourcer(indexer);
+bgreen = target(:,:,2);
+bgreen = resize(bgreen,[size(bred,1)*size(bred,2),1]);
+bgreen(indexe) = 4*sourceg(indexe)-sourceg(indexeup)-sourceg(indexed)-sourceg(indexel)-sourceg(indexer);
+bblue = target(:,:,3);
+bblue = resize(bblue,[size(bred,1)*size(bred,2),1]);
+bblue(indexe) = 4*sourceb(indexe)-sourceb(indexeup)-sourceb(indexed)-sourceb(indexel)-sourceb(indexer);
+
+%final step
+outred = A\bred;
+outgreen = A\bgreen;
+outblue = A\bblue;
+out1= reshape(outred,Size(1),Size(2));
+out2= reshape(outgreen,Size(1),Size(2));
+out3= reshape(outblue,Size(1),Size(2));
+
+out = ones(Size(1),Size(2),3);
+out(:,:,1)=out1;
+out(:,:,2)=out2;
+out(:,:,3)=out3;
+out = (out * transparent + target*(1 - transparent));
+end
+
+end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% As explained on the web page, we solve for output by setting up a large
+% system of equations, in matrix form, which specifies the desired value or
+% gradient or Laplacian (e.g.
+% http://en.wikipedia.org/wiki/Discrete_Laplace_operator)
+
+% The comments here will walk you through a conceptually simple way to set
+% up the image blending, although it is not necessarily the most efficient
+% formulation.
+
+% We will set up a system of equations A * x = b, where A has as many rows
+% and columns as there are pixels in our images. Thus, a 300x200 image will
+% lead to A being 60000 x 60000. 'x' is our output image (a single color
+% channel of it) stretched out as a vector. 'b' contains two types of known
+% values:
+%  (1) For rows of A which correspond to pixels that are not under the
+%      mask, b will simply contain the already known value from 'target'
+%      and the row of A will be a row of an identity matrix. Basically,
+%      this is our system of equations saying "do nothing for the pixels we
+%      already know".
+%  (2) For rows of A which correspond to pixels under the mask, we will
+%      specify that the gradient (actually the discrete Laplacian) in the
+%      output should equal the gradient in 'source', according to the final
+%      equation in the webpage:
+%         4*x(i,j) - x(i-1, j) - x(i+1, j) - x(i, j-1) - x(i, j+1) =
+%         4*s(i,j) - s(i-1, j) - s(i+1, j) - s(i, j-1) - s(i, j+1)
+%      The right hand side are measurements from the source image. The left
+%      hand side relates different (mostly) unknown pixels in the output
+%      image. At a high level, for these rows in our system of equations we
+%      are saying "For this pixel, I don't know its value, but I know that
+%      its value relative to its neighbors should be the same as it was in
+%      the source image".
+
+% commands you may find useful:
+%   speye - With the simplest formulation, most rows of 'A' will be the
+%      same as an identity matrix. So one strategy is to start with a
+%      sparse identity matrix from speye and then add the necessary
+%      values. This will be somewhat slow.
+%   sparse - if you want your code to run quickly, compute the values and
+%      indices for the non-zero entries in A and then construct 'A' with a
+%      single call to 'sparse'.
+%      Matlab documentation on what's going on under the hood with a sparse
+%      matrix: www.mathworks.com/help/pdf_doc/otherdocs/simax.pdf
+%   reshape - convert x back to an image with a single call.
+%   sub2ind and ind2sub - how to find correspondence between rows of A and
+%      pixels in the image. It's faster if you simply do the conversion
+%      yourself, though.
+%   see also find, sort, diff, cat, and spy
+
+
